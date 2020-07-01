@@ -98,8 +98,6 @@ struct adapter
    struct adapter *next;
 };
 
-static bool raw_mode;
-
 static volatile int quitting;
 
 static struct adapter adapters;
@@ -150,23 +148,27 @@ static bool uinput_create(int i, struct ports *port, unsigned char type)
    ioctl(port->uinput, UI_SET_ABSBIT, ABS_Z);
    ioctl(port->uinput, UI_SET_ABSBIT, ABS_RZ);
 
-   if (raw_mode)
-   {
-      uinput_dev.absmin[ABS_X]  = 0;  uinput_dev.absmax[ABS_X]  = 255;
-      uinput_dev.absmin[ABS_Y]  = 0;  uinput_dev.absmax[ABS_Y]  = 255;
-      uinput_dev.absmin[ABS_RX] = 0;  uinput_dev.absmax[ABS_RX] = 255;
-      uinput_dev.absmin[ABS_RY] = 0;  uinput_dev.absmax[ABS_RY] = 255;
-      uinput_dev.absmin[ABS_Z]  = 0;  uinput_dev.absmax[ABS_Z]  = 255;
-      uinput_dev.absmin[ABS_RZ] = 0;  uinput_dev.absmax[ABS_RZ] = 255;
-   }
-   else
-   {
-      uinput_dev.absmin[ABS_X]  = 20; uinput_dev.absmax[ABS_X]  = 235;
-      uinput_dev.absmin[ABS_Y]  = 20; uinput_dev.absmax[ABS_Y]  = 235;
-      uinput_dev.absmin[ABS_RX] = 30; uinput_dev.absmax[ABS_RX] = 225;
-      uinput_dev.absmin[ABS_RY] = 30; uinput_dev.absmax[ABS_RY] = 225;
-      uinput_dev.absmin[ABS_Z]  = 25; uinput_dev.absmax[ABS_Z]  = 225;
-      uinput_dev.absmin[ABS_RZ] = 25; uinput_dev.absmax[ABS_RZ] = 225;
+   if (calibrate) {
+      uinput_dev.absmin[ABS_X]  = 0;  uinput_dev.absmax[ABS_X]  = 0xFF;
+      uinput_dev.absmin[ABS_Y]  = 0;  uinput_dev.absmax[ABS_Y]  = 0xFF;
+      uinput_dev.absmin[ABS_RX] = 0;  uinput_dev.absmax[ABS_RX] = 0xFF;
+      uinput_dev.absmin[ABS_RY] = 0;  uinput_dev.absmax[ABS_RY] = 0xFF;
+      uinput_dev.absmin[ABS_Z]  = 0;  uinput_dev.absmax[ABS_Z]  = 0xFF;
+      uinput_dev.absmin[ABS_RZ] = 0;  uinput_dev.absmax[ABS_RZ] = 0xFF;
+   } else {
+      uinput_dev.absmin[ABS_X]  = AXIS_MIN_VALUES[AXIS_OFFSET_VALUES[ABS_X]];
+      uinput_dev.absmin[ABS_Y]  = AXIS_MIN_VALUES[AXIS_OFFSET_VALUES[ABS_Y]];
+      uinput_dev.absmin[ABS_RX] = AXIS_MIN_VALUES[AXIS_OFFSET_VALUES[ABS_RX]];
+      uinput_dev.absmin[ABS_RY] = AXIS_MIN_VALUES[AXIS_OFFSET_VALUES[ABS_RY]];
+      uinput_dev.absmin[ABS_Z]  = AXIS_MIN_VALUES[AXIS_OFFSET_VALUES[ABS_Z]];
+      uinput_dev.absmin[ABS_RZ] = AXIS_MIN_VALUES[AXIS_OFFSET_VALUES[ABS_RZ]];
+
+      uinput_dev.absmax[ABS_X]  = AXIS_MAX_VALUES[AXIS_OFFSET_VALUES[ABS_X]];
+      uinput_dev.absmax[ABS_Y]  = AXIS_MAX_VALUES[AXIS_OFFSET_VALUES[ABS_Y]];
+      uinput_dev.absmax[ABS_RX] = AXIS_MAX_VALUES[AXIS_OFFSET_VALUES[ABS_RX]];
+      uinput_dev.absmax[ABS_RY] = AXIS_MAX_VALUES[AXIS_OFFSET_VALUES[ABS_RY]];
+      uinput_dev.absmax[ABS_Z]  = AXIS_MAX_VALUES[AXIS_OFFSET_VALUES[ABS_Z]];
+      uinput_dev.absmax[ABS_RZ] = AXIS_MAX_VALUES[AXIS_OFFSET_VALUES[ABS_RZ]];
    }
 
    // rumble
@@ -438,6 +440,14 @@ static void handle_payload(int i, struct ports *port, unsigned char *payload, st
    }
 }
 
+void print_calibration_data()
+{
+   for (size_t i = 0; i < sizeof(AXIS_MIN_VALUES); i++) {
+      printf("%d,%d,", AXIS_MIN_VALUES[i], AXIS_MAX_VALUES[i]);
+   }
+   printf("\n");
+}
+
 static void *adapter_thread(void *data)
 {
    struct adapter *a = (struct adapter *)data;
@@ -516,15 +526,7 @@ static void *adapter_thread(void *data)
    }
 
    if (calibrate) {
-       printf(
-           "X %d,%d Y %d,%d; RX %d,%d; RY %d,%d; Z %d,%d, RZ %d,%d\n",
-           AXIS_MIN_VALUES[0], AXIS_MAX_VALUES[0],
-           AXIS_MIN_VALUES[1], AXIS_MAX_VALUES[1],
-           AXIS_MIN_VALUES[2], AXIS_MAX_VALUES[2],
-           AXIS_MIN_VALUES[3], AXIS_MAX_VALUES[3],
-           AXIS_MIN_VALUES[4], AXIS_MAX_VALUES[4],
-           AXIS_MIN_VALUES[5], AXIS_MAX_VALUES[5]
-       );
+      print_calibration_data();
    }
 
    return NULL;
@@ -606,18 +608,55 @@ static void quitting_signal(int sig)
    quitting = 1;
 }
 
+void set_calibration_data(char str[])
+{
+   char *token = strtok(str, ",");
+   for (size_t i = 0; token && i < sizeof(AXIS_MIN_VALUES); i++) {
+      AXIS_MIN_VALUES[i] = atoi(token);
+      token = strtok(NULL, ",");
+
+      AXIS_MAX_VALUES[i] = atoi(token);
+      token = strtok(NULL, ",");
+   }
+}
+
 void parse_args(int argc, char *argv[])
 {
+   bool has_calibration_data = false;
+
    for (int i = 1; i < argc; i++) {
-      if ((strcmp(argv[i], "-r") == 0 || strcmp(argv[i], "--raw") == 0))
-      {
-         fprintf(stderr, "raw mode enabled\n");
-         raw_mode = true;
-      } else if (strcmp(argv[i], "--calibrate") == 0)
-      {
-         fprintf(stderr, "output raw calibration data\nquit to display the results");
+      if (
+         (strcmp(argv[i], "-c") == 0) ||
+         (strcmp(argv[i], "--calibrate") == 0)
+      ) {
+         fprintf(stderr, "output raw calibration data\nquit to display the results\n");
          calibrate = true;
       }
+
+      if (
+         (strcmp(argv[i], "-s") == 0) ||
+         (strcmp(argv[i], "--set-calibration-data") == 0)
+      ) {
+         if (i+1 < argc) {
+            set_calibration_data(argv[i+1]);
+            has_calibration_data = true;
+            calibrate = false;
+            i++;
+         } else {
+            fprintf(stderr, "missing calibration data, generate it with --calibrate\n");
+         }
+      }
+   }
+
+   if (!has_calibration_data && !calibrate) {
+      memset(&AXIS_MIN_VALUES, 0, sizeof(AXIS_MIN_VALUES));
+      memset(&AXIS_MAX_VALUES, 0xFF, sizeof(AXIS_MAX_VALUES));
+   }
+
+
+   if (!calibrate) {
+      printf("using calibration data: ");
+      print_calibration_data();
    }
 }
 
