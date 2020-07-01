@@ -61,6 +61,10 @@ const int AXIS_OFFSET_VALUES[6] = {
    ABS_RZ
 };
 
+static uint8_t AXIS_MIN_VALUES[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+static uint8_t AXIS_MAX_VALUES[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+static bool calibrate = false;
+
 struct ff_event
 {
    bool in_use;
@@ -346,6 +350,15 @@ static void handle_payload(int i, struct ports *port, unsigned char *payload, st
       if (AXIS_OFFSET_VALUES[j] == ABS_Y || AXIS_OFFSET_VALUES[j] == ABS_RY)
          value ^= 0xFF; // flip from 0 - 255 to 255 - 0
 
+      if (calibrate) {
+         if (value < AXIS_MIN_VALUES[j]) {
+             AXIS_MIN_VALUES[j] = value;
+         }
+         if (value > AXIS_MAX_VALUES[j]) {
+             AXIS_MAX_VALUES[j] = value;
+         }
+      }
+
       if (port->axis[j] != value)
       {
          events[e_count].type = EV_ABS;
@@ -502,6 +515,18 @@ static void *adapter_thread(void *data)
          uinput_destroy(i, &a->controllers[i]);
    }
 
+   if (calibrate) {
+       printf(
+           "X %d,%d Y %d,%d; RX %d,%d; RY %d,%d; Z %d,%d, RZ %d,%d\n",
+           AXIS_MIN_VALUES[0], AXIS_MAX_VALUES[0],
+           AXIS_MIN_VALUES[1], AXIS_MAX_VALUES[1],
+           AXIS_MIN_VALUES[2], AXIS_MAX_VALUES[2],
+           AXIS_MIN_VALUES[3], AXIS_MAX_VALUES[3],
+           AXIS_MIN_VALUES[4], AXIS_MAX_VALUES[4],
+           AXIS_MIN_VALUES[5], AXIS_MAX_VALUES[5]
+       );
+   }
+
    return NULL;
 }
 
@@ -581,6 +606,21 @@ static void quitting_signal(int sig)
    quitting = 1;
 }
 
+void parse_args(int argc, char *argv[])
+{
+   for (int i = 1; i < argc; i++) {
+      if ((strcmp(argv[i], "-r") == 0 || strcmp(argv[i], "--raw") == 0))
+      {
+         fprintf(stderr, "raw mode enabled\n");
+         raw_mode = true;
+      } else if (strcmp(argv[i], "--calibrate") == 0)
+      {
+         fprintf(stderr, "output raw calibration data\nquit to display the results");
+         calibrate = true;
+      }
+   }
+}
+
 int main(int argc, char *argv[])
 {
    struct udev *udev;
@@ -589,11 +629,7 @@ int main(int argc, char *argv[])
 
    memset(&sa, 0, sizeof(sa));
 
-   if (argc > 1 && (strcmp(argv[1], "-r") == 0 || strcmp(argv[1], "--raw") == 0))
-   {
-      fprintf(stderr, "raw mode enabled\n");
-      raw_mode = true;
-   }
+   parse_args(argc, argv);
 
    sa.sa_handler = quitting_signal;
    sa.sa_flags = SA_RESTART | SA_RESETHAND;
